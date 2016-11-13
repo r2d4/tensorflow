@@ -37,25 +37,69 @@ DEFAULT_PORT = 2222
 
 # Worker pods will mount host volume /shared, as a convenient way to create
 # shared storage among workers during local tests.
-WORKER_RC = (
-    """apiVersion: v1
-kind: ReplicationController
+# WORKER_RC = (
+#     """apiVersion: v1
+# kind: ReplicationController
+# metadata:
+#   name: tf-worker{worker_id}
+# spec:
+#   replicas: 1
+#   template:
+#     metadata:
+#       labels:
+#         tf-worker: "{worker_id}"
+#     spec:
+#       containers:
+#       - name: tf-worker{worker_id}
+#         image: {docker_image}
+#         args:
+#           - --cluster_spec={cluster_spec}
+#           - --job_name=worker
+#           - --task_id={worker_id}
+#         ports:
+#         - containerPort: {port}
+#         volumeMounts:
+#         - name: shared
+#           mountPath: /shared
+#       volumes:
+#       - name: shared
+#         hostPath:
+#           path: /shared
+# """)
+PETSET_TEMPLATE = (
+  """apiVersion: v1
+kind: Service
 metadata:
-  name: tf-worker{worker_id}
+  name: tf-{job_name}
+  labels:
+    tf: {job_name}
 spec:
-  replicas: 1
+  type: {service_type}
+  ports:
+  - port: {port}
+  # *.tf-{job_name}.default.svc.cluster.local
+  selector:
+    tf: {job_name}
+---
+apiVersion: apps/v1alpha1
+kind: PetSet
+metadata:
+  name: tf-{job_name}
+spec:
+  serviceName: tf-{job_name}
+  replicas: {replicas}
   template:
     metadata:
       labels:
-        tf-worker: "{worker_id}"
+        tf: {job_name}
     spec:
+      terminationGracePeriodSeconds: 0
       containers:
-      - name: tf-worker{worker_id}
+      - name: tf-{job_name}
         image: {docker_image}
         args:
           - --cluster_spec={cluster_spec}
-          - --job_name=worker
-          - --task_id={worker_id}
+          - --job_name={job_name}
         ports:
         - containerPort: {port}
         volumeMounts:
@@ -66,89 +110,61 @@ spec:
         hostPath:
           path: /shared
 """)
-WORKER_SVC = (
-    """apiVersion: v1
-kind: Service
-metadata:
-  name: tf-worker{worker_id}
-  labels:
-    tf-worker: "{worker_id}"
-spec:
-  ports:
-  - port: {port}
-    targetPort: {port}
-  selector:
-    tf-worker: "{worker_id}"
-""")
-WORKER_LB_SVC = (
-    """apiVersion: v1
-kind: Service
-metadata:
-  name: tf-worker{worker_id}
-  labels:
-    tf-worker: "{worker_id}"
-spec:
-  type: LoadBalancer
-  ports:
-  - port: {port}
-  selector:
-    tf-worker: "{worker_id}"
-""")
-PARAM_SERVER_RC = (
-    """apiVersion: v1
-kind: ReplicationController
-metadata:
-  name: tf-ps{param_server_id}
-spec:
-  replicas: 1
-  template:
-    metadata:
-      labels:
-        tf-ps: "{param_server_id}"
-    spec:
-      containers:
-      - name: tf-ps{param_server_id}
-        image: {docker_image}
-        args:
-          - --cluster_spec={cluster_spec}
-          - --job_name=ps
-          - --task_id={param_server_id}
-        ports:
-        - containerPort: {port}
-        volumeMounts:
-        - name: shared
-          mountPath: /shared
-      volumes:
-      - name: shared
-        hostPath:
-          path: /shared
-""")
-PARAM_SERVER_SVC = (
-    """apiVersion: v1
-kind: Service
-metadata:
-  name: tf-ps{param_server_id}
-  labels:
-    tf-ps: "{param_server_id}"
-spec:
-  ports:
-  - port: {port}
-  selector:
-    tf-ps: "{param_server_id}"
-""")
-PARAM_LB_SVC = ("""apiVersion: v1
-kind: Service
-metadata:
-  name: tf-ps{param_server_id}
-  labels:
-    tf-ps: "{param_server_id}"
-spec:
-  type: LoadBalancer
-  ports:
-  - port: {port}
-  selector:
-    tf-ps: "{param_server_id}"
-""")
+# PARAM_SERVER_RC = (
+#     """apiVersion: v1
+# kind: ReplicationController
+# metadata:
+#   name: tf-ps{param_server_id}
+# spec:
+#   replicas: 1
+#   template:
+#     metadata:
+#       labels:
+#         tf-ps: "{param_server_id}"
+#     spec:
+#       containers:
+#       - name: tf-ps{param_server_id}
+#         image: {docker_image}
+#         args:
+#           - --cluster_spec={cluster_spec}
+#           - --job_name=ps
+#           - --task_id={param_server_id}
+#         ports:
+#         - containerPort: {port}
+#         volumeMounts:
+#         - name: shared
+#           mountPath: /shared
+#       volumes:
+#       - name: shared
+#         hostPath:
+#           path: /shared
+# """)
+# PARAM_SERVER_SVC = (
+#     """apiVersion: v1
+# kind: Service
+# metadata:
+#   name: tf-ps{param_server_id}
+#   labels:
+#     tf-ps: "{param_server_id}"
+# spec:
+#   ports:
+#   - port: {port}
+#   selector:
+#     tf-ps: "{param_server_id}"
+# """)
+# PARAM_LB_SVC = ("""apiVersion: v1
+# kind: Service
+# metadata:
+#   name: tf-ps{param_server_id}
+#   labels:
+#     tf-ps: "{param_server_id}"
+# spec:
+#   type: LoadBalancer
+#   ports:
+#   - port: {port}
+#   selector:
+#     tf-ps: "{param_server_id}"
+# """)
 
 
 def main():
@@ -199,75 +215,65 @@ def main():
 
 
 def GenerateConfig(num_workers,
-                   num_param_servers,
+                   num_parameter_servers,
                    port,
                    request_load_balancer,
                    docker_image):
   """Generate configuration strings."""
   config = ''
-  for worker in range(num_workers):
-    config += WORKER_RC.format(
-        port=port,
-        worker_id=worker,
-        docker_image=docker_image,
-        cluster_spec=WorkerClusterSpecString(num_workers,
-                                             num_param_servers,
-                                             port))
-    config += '---\n'
-    if request_load_balancer:
-      config += WORKER_LB_SVC.format(port=port,
-                                     worker_id=worker)
-    else:
-      config += WORKER_SVC.format(port=port,
-                                  worker_id=worker)
-    config += '---\n'
 
-  for param_server in range(num_param_servers):
-    config += PARAM_SERVER_RC.format(
+  # If request load balancer, set service type to LoadBalancer
+  # otherwise, use the default type ClusterIP
+  if request_load_balancer:
+    service_type = "LoadBalancer"
+  else:
+    service_type = "ClusterIP"
+
+  cluster_spec = ClusterSpecString(num_workers,
+                       num_parameter_servers,
+                       port)
+
+  # Generate the petset and service for the worker job servers """
+  config += PETSET_TEMPLATE.format(
         port=port,
-        param_server_id=param_server,
+        job_name="worker",
         docker_image=docker_image,
-        cluster_spec=ParamServerClusterSpecString(num_workers,
-                                                  num_param_servers,
-                                                  port))
-    config += '---\n'
-    if request_load_balancer:
-      config += PARAM_LB_SVC.format(port=port, param_server_id=param_server)
-    else:
-      config += PARAM_SERVER_SVC.format(port=port, param_server_id=param_server)
-    config += '---\n'
+        service_type=service_type,
+        replicas=num_workers,
+        cluster_spec=cluster_spec)
+  config += '---\n'
+
+  # Generate the petset and service for the parameter servers
+  config += PETSET_TEMPLATE.format(
+        port=port,
+        job_name="ps",
+        docker_image=docker_image,
+        service_type=service_type,
+        replicas=num_parameter_servers,
+        cluster_spec=cluster_spec)
 
   return config
 
-
-def WorkerClusterSpecString(num_workers,
-                            num_param_servers,
-                            port):
-  """Generates worker cluster spec."""
-  return ClusterSpecString(num_workers, num_param_servers, port)
-
-
-def ParamServerClusterSpecString(num_workers,
-                                 num_param_servers,
-                                 port):
-  """Generates parameter server spec."""
-  return ClusterSpecString(num_workers, num_param_servers, port)
-
-
 def ClusterSpecString(num_workers,
-                      num_param_servers,
+                      num_parameter_servers,
                       port):
-  """Generates general cluster spec."""
+  """Generates the cluster spec."""
+
+  # Kubernetes guarantees us ordinal numbering for petsets
+  # so that for n replicas of a tf-worker
+  # we will have DNS entries for 
+  # tf-worker-1.default, tf-worker-2.default, etc.
+
   spec = 'worker|'
   for worker in range(num_workers):
-    spec += 'tf-worker%d:%d' % (worker, port)
+    spec += 'tf-worker-%d:%d' % (worker, port)
     if worker != num_workers-1:
       spec += ';'
 
   spec += ',ps|'
-  for param_server in range(num_param_servers):
-    spec += 'tf-ps%d:%d' % (param_server, port)
-    if param_server != num_param_servers-1:
+  for param_server in range(num_parameter_servers):
+    spec += 'tf-ps-%d:%d' % (param_server, port)
+    if param_server != num_parameter_servers-1:
       spec += ';'
 
   return spec

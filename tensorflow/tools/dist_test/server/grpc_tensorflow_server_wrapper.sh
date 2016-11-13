@@ -20,6 +20,12 @@ LOG_FILE="/tmp/grpc_tensorflow_server.log"
 
 SCRIPT_DIR=$( cd ${0%/*} && pwd -P )
 
+# Use the ordinal assigned by the PetSet
+# as the task id
+TASK_ID=${HOSTNAME##*-}
+
 touch "${LOG_FILE}"
 
+echo Starting GRPC Tensorflow Server with params
+echo $@ --task_id=${TASK_ID}
 python ${SCRIPT_DIR}/grpc_tensorflow_server.py $@ 2>&1 | tee "${LOG_FILE}"
