@@ -92,6 +92,8 @@ spec:
     metadata:
       labels:
         tf: {job_name}
+      annotations:
+        pod.alpha.kubernetes.io/initialized: "true"
     spec:
       terminationGracePeriodSeconds: 0
       containers:
