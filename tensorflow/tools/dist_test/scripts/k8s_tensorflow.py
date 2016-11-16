@@ -33,39 +33,12 @@ import sys
 DEFAULT_DOCKER_IMAGE = 'tensorflow/tf_grpc_test_server'
 DEFAULT_PORT = 2222
 
+DNS_SUFFIX="default.svc.cluster.local"
+
 # TODO(cais): Consider adding resource requests/limits to the pods.
 
 # Worker pods will mount host volume /shared, as a convenient way to create
 # shared storage among workers during local tests.
-# WORKER_RC = (
-#     """apiVersion: v1
-# kind: ReplicationController
-# metadata:
-#   name: tf-worker{worker_id}
-# spec:
-#   replicas: 1
-#   template:
-#     metadata:
-#       labels:
-#         tf-worker: "{worker_id}"
-#     spec:
-#       containers:
-#       - name: tf-worker{worker_id}
-#         image: {docker_image}
-#         args:
-#           - --cluster_spec={cluster_spec}
-#           - --job_name=worker
-#           - --task_id={worker_id}
-#         ports:
-#         - containerPort: {port}
-#         volumeMounts:
-#         - name: shared
-#           mountPath: /shared
-#       volumes:
-#       - name: shared
-#         hostPath:
-#           path: /shared
-# """)
 PETSET_TEMPLATE = (
   """apiVersion: v1
 kind: Service
@@ -74,7 +47,7 @@ metadata:
   labels:
     tf: {job_name}
 spec:
-  type: {service_type}
+  clusterIP: None
   ports:
   - port: {port}
   # *.tf-{job_name}.default.svc.cluster.local
@@ -112,62 +85,6 @@ spec:
         hostPath:
           path: /shared
 """)
-# PARAM_SERVER_RC = (
-#     """apiVersion: v1
-# kind: ReplicationController
-# metadata:
-#   name: tf-ps{param_server_id}
-# spec:
-#   replicas: 1
-#   template:
-#     metadata:
-#       labels:
-#         tf-ps: "{param_server_id}"
-#     spec:
-#       containers:
-#       - name: tf-ps{param_server_id}
-#         image: {docker_image}
-#         args:
-#           - --cluster_spec={cluster_spec}
-#           - --job_name=ps
-#           - --task_id={param_server_id}
-#         ports:
-#         - containerPort: {port}
-#         volumeMounts:
-#         - name: shared
-#           mountPath: /shared
-#       volumes:
-#       - name: shared
-#         hostPath:
-#           path: /shared
-# """)
-# PARAM_SERVER_SVC = (
-#     """apiVersion: v1
-# kind: Service
-# metadata:
-#   name: tf-ps{param_server_id}
-#   labels:
-#     tf-ps: "{param_server_id}"
-# spec:
-#   ports:
-#   - port: {port}
-#   selector:
-#     tf-ps: "{param_server_id}"
-# """)
-# PARAM_LB_SVC = ("""apiVersion: v1
-# kind: Service
-# metadata:
-#   name: tf-ps{param_server_id}
-#   labels:
-#     tf-ps: "{param_server_id}"
-# spec:
-#   type: LoadBalancer
-#   ports:
-#   - port: {port}
-#   selector:
-#     tf-ps: "{param_server_id}"
-# """)
-
 
 def main():
   """Do arg parsing."""
@@ -184,12 +101,6 @@ def main():
                       type=int,
                       default=DEFAULT_PORT,
                       help='GRPC server port (Default: %d)' % DEFAULT_PORT)
-  parser.add_argument('--request_load_balancer',
-                      type=bool,
-                      default=False,
-                      help='To request worker0 to be exposed on a public IP '
-                      'address via an external load balancer, enabling you to '
-                      'run client processes from outside the cluster')
   parser.add_argument('--docker_image',
                       type=str,
                       default=DEFAULT_DOCKER_IMAGE,
@@ -211,7 +122,6 @@ def main():
   yaml_config = GenerateConfig(args.num_workers,
                                args.num_parameter_servers,
                                args.grpc_port,
-                               args.request_load_balancer,
                                args.docker_image)
   print(yaml_config)  # pylint: disable=superfluous-parens
 
@@ -219,17 +129,10 @@ def main():
 def GenerateConfig(num_workers,
                    num_parameter_servers,
                    port,
-                   request_load_balancer,
                    docker_image):
   """Generate configuration strings."""
   config = ''
 
-  # If request load balancer, set service type to LoadBalancer
-  # otherwise, use the default type ClusterIP
-  if request_load_balancer:
-    service_type = "LoadBalancer"
-  else:
-    service_type = "ClusterIP"
 
   cluster_spec = ClusterSpecString(num_workers,
                        num_parameter_servers,
@@ -240,7 +143,6 @@ def GenerateConfig(num_workers,
         port=port,
         job_name="worker",
         docker_image=docker_image,
-        service_type=service_type,
         replicas=num_workers,
         cluster_spec=cluster_spec)
   config += '---\n'
@@ -250,7 +152,6 @@ def GenerateConfig(num_workers,
         port=port,
         job_name="ps",
         docker_image=docker_image,
-        service_type=service_type,
         replicas=num_parameter_servers,
         cluster_spec=cluster_spec)
 
@@ -268,13 +169,13 @@ def ClusterSpecString(num_workers,
 
   spec = 'worker|'
   for worker in range(num_workers):
-    spec += 'tf-worker-%d:%d' % (worker, port)
+    spec += 'tf-worker-%d.tf-worker.%s:%d' % (worker, DNS_SUFFIX, port)
     if worker != num_workers-1:
       spec += ';'
 
   spec += ',ps|'
   for param_server in range(num_parameter_servers):
-    spec += 'tf-ps-%d:%d' % (param_server, port)
+    spec += 'tf-ps-%d.tf-ps.%s:%d' % (param_server, DNS_SUFFIX, port)
     if param_server != num_parameter_servers-1:
       spec += ';'
 

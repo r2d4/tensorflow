@@ -1,0 +1,187 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: tf-worker
+  labels:
+    tf: worker
+spec:
+  clusterIP: None
+  ports:
+  - port: 2222
+  # *.tf-worker.default.svc.cluster.local
+  selector:
+    tf: worker
+---
+apiVersion: apps/v1alpha1
+kind: PetSet
+metadata:
+  name: tf-worker
+spec:
+  serviceName: tf-worker
+  replicas: 2
+  template:
+    metadata:
+      labels:
+        tf: worker
+      annotations:
+        pod.alpha.kubernetes.io/initialized: "true"
+    spec:
+      terminationGracePeriodSeconds: 0
+      containers:
+      - name: tf-worker
+        image: tensorflow/tf_grpc_test_server
+        args:
+          - --cluster_spec=worker|tf-worker-0.tf-worker.default.svc.cluster.local:2222;tf-worker-1.tf-worker.default.svc.cluster.local:2222,ps|tf-ps-0.tf-ps.default.svc.cluster.local:2222
+          - --job_name=worker
+          - --verbose=True
+        ports:
+        - containerPort: 2222
+        volumeMounts:
+        - name: shared
+          mountPath: /shared
+      volumes:
+      - name: shared
+        hostPath:
+          path: /shared
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tf-ps
+  labels:
+    tf: ps
+spec:
+  clusterIP: None
+  ports:
+  - port: 2222
+  # *.tf-ps.default.svc.cluster.local
+  selector:
+    tf: ps
+---
+apiVersion: apps/v1alpha1
+kind: PetSet
+metadata:
+  name: tf-ps
+spec:
+  serviceName: tf-ps
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        tf: ps
+      annotations:
+        pod.alpha.kubernetes.io/initialized: "true"
+    spec:
+      terminationGracePeriodSeconds: 0
+      containers:
+      - name: tf-ps
+        image: tensorflow/tf_grpc_test_server
+        args:
+          - --cluster_spec=worker|tf-worker-0.tf-worker.default.svc.cluster.local:2222;tf-worker-1.tf-worker.default.svc.cluster.local:2222,ps|tf-ps-0.tf-ps.default.svc.cluster.local:2222
+          - --job_name=ps
+          - --verbose=True
+        ports:
+        - containerPort: 2222
+        volumeMounts:
+        - name: shared
+          mountPath: /shared
+      volumes:
+      - name: shared
+        hostPath:
+          path: /shared
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: download-mnist-data
+spec:
+  template:
+    metadata:
+      name: download-mnist-data
+    spec:
+      containers:
+      - name: download-mnist-data
+        image: tensorflow/tf_grpc_test_server
+        imagePullPolicy: IfNotPresent
+        command: 
+          - python
+          - /var/tf-k8s/python/mnist_replica.py
+        args:
+          - --download_only
+        volumeMounts:
+        - name: shared
+          mountPath: /tmp
+      volumes:
+      - name: shared
+        hostPath:
+          path: /shared
+      restartPolicy: Never
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: train-mnist-data-0
+spec:
+  template:
+    metadata:
+      name: train-mnist-data-0
+    spec:
+      containers:
+      - name: train-mnist-data
+        image: tensorflow/tf_grpc_test_server
+        imagePullPolicy: IfNotPresent
+        command: 
+          - python
+          - /var/tf-k8s/python/mnist_replica.py
+        args:
+          - --job_name=worker
+          - --task_index=0
+          - --num_gpus=0
+          - --train_steps=500
+          - --sync_replicas=True
+          - --existing_servers=True
+          - --ps_hosts=tf-ps-0.tf-ps.default.svc.cluster.local:2222
+          - --worker_hosts=tf-worker-0.tf-worker.default.svc.cluster.local:2222,tf-worker-1.tf-worker.default.svc.cluster.local:2222
+        volumeMounts:
+        - name: tf-data
+          mountPath: /tmp
+      volumes:
+      - name: tf-data
+        hostPath:
+          path: /shared
+      restartPolicy: Never
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: train-mnist-data-1
+spec:
+  template:
+    metadata:
+      name: train-mnist-data-1
+    spec:
+      containers:
+      - name: train-mnist-data
+        image: tensorflow/tf_grpc_test_server
+        imagePullPolicy: IfNotPresent
+        command: 
+          - python
+          - /var/tf-k8s/python/mnist_replica.py
+        args:
+          - --job_name=worker
+          - --task_index=1
+          - --num_gpus=0
+          - --train_steps=500
+          - --sync_replicas=True
+          - --existing_servers=True
+          - --ps_hosts=tf-ps-0.tf-ps.default.svc.cluster.local:2222
+          - --worker_hosts=tf-worker-0.tf-worker.default.svc.cluster.local:2222,tf-worker-1.tf-worker.default.svc.cluster.local:2222
+        volumeMounts:
+        - name: tf-data
+          mountPath: /tmp
+      volumes:
+      - name: tf-data
+        hostPath:
+          path: /shared
+      restartPolicy: Never
+
